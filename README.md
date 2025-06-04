@@ -159,5 +159,3 @@ npm run test:watch
 MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
-
-**Built with ❤️ for a sustainable future**
