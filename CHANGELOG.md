@@ -5,7 +5,34 @@ All notable changes to VeridiLedger will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2024-12-21 - Phase 1.1 Complete
+
+### Added
+- **Comprehensive Transaction History System**
+  - Advanced filtering by transaction type, status, and date ranges
+  - Real-time search across transaction IDs, hashes, and metadata
+  - Pagination for efficient handling of large datasets
+  - Multi-column sorting (timestamp, amount, type, status)
+  - CSV export functionality for external analysis
+  - Direct integration with Stacks blockchain explorer
+- **Professional Navigation System**
+  - React Router implementation with multi-page routing
+  - Navigation bar with active state indicators
+  - Dedicated transaction history page
+  - Responsive navigation design
+- **Enhanced User Experience**
+  - Loading states and error handling throughout the application
+  - Professional UI components with consistent design system
+  - Mobile-first responsive design improvements
+  - Session persistence for wallet connections
+
+### Enhanced
+- Updated README.md with comprehensive feature documentation
+- Improved project structure with dedicated pages directory
+- Enhanced error handling and user feedback systems
+- Professional commit messages and development workflow
+
+## [0.1.0] - 2024-12-20 - Initial MVP
 
 ### Added
 - Initial project setup with React + TypeScript + Vite
