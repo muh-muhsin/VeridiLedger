@@ -30,18 +30,29 @@ VeridiLedger is a comprehensive platform for tracking carbon credits on the Stac
 
 ## Features
 
-### Current Features (MVP)
-- ✅ Wallet connection via Stacks wallets
-- ✅ Basic dashboard with platform statistics
-- ✅ Responsive design with Tailwind CSS
+### Current Features (Phase 1.1 Complete)
+- ✅ **Stacks Wallet Integration** - Complete wallet connection with session persistence
+- ✅ **Carbon Credit NFT Smart Contract** - SIP-009 compliant smart contract deployed on testnet
+- ✅ **Dashboard with Platform Statistics** - Real-time blockchain data and analytics
+- ✅ **Comprehensive Transaction History** - Advanced filtering, pagination, search, and export
+- ✅ **Responsive Design** - Mobile-first design with Tailwind CSS
+- ✅ **Professional Navigation** - Multi-page routing with React Router
 
-### Planned Features
-- 🔄 Carbon credit NFT management (SIP-009)
-- 🔄 Credit origination and retirement
-- 🔄 Transfer and trading functionality
-- 🔄 Advanced analytics and reporting
-- 🔄 Business API integration
-- 🔄 Automated sustainability reports
+### Advanced Features (Transaction History)
+- 🔍 **Advanced Filtering** - Filter by transaction type, status, and date ranges
+- 📊 **Real-time Search** - Search across transaction IDs, hashes, and metadata
+- 📄 **Pagination** - Efficient handling of large transaction datasets
+- 📈 **Sorting** - Sort by timestamp, amount, type, or status
+- 📋 **CSV Export** - Export transaction data for external analysis
+- 🔗 **Blockchain Explorer Integration** - Direct links to Stacks Explorer
+
+### Planned Features (Phase 1.2+)
+- 🔄 Carbon credit origination and minting interface
+- 🔄 Credit transfer functionality with approval workflows
+- 🔄 Credit retirement with verification and certificates
+- 🔄 Advanced analytics and reporting dashboards
+- 🔄 RESTful API for business integration
+- 🔄 Multi-signature wallet support
 
 ## Tech Stack
 

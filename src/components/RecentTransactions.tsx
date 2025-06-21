@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Activity, ArrowRight, Leaf, RefreshCw } from 'lucide-react'
+import { Activity, ArrowRight, Leaf, RefreshCw, Filter, Download, ChevronLeft, ChevronRight } from 'lucide-react'
 
 /**
  * Transaction interface
@@ -12,16 +12,47 @@ interface Transaction {
   to: string
   timestamp: string
   blockHeight: number
+  status: 'pending' | 'confirmed' | 'failed'
+  amount?: number
+  fee?: number
 }
 
 /**
- * RecentTransactions component displays the latest platform transactions
- * Shows origination, transfer, and retirement activities
+ * Transaction filter interface
+ */
+interface TransactionFilter {
+  type: 'all' | 'origination' | 'transfer' | 'retirement'
+  status: 'all' | 'pending' | 'confirmed' | 'failed'
+  dateRange: 'all' | '24h' | '7d' | '30d' | 'custom'
+  customStartDate?: string
+  customEndDate?: string
+}
+
+/**
+ * RecentTransactions component displays comprehensive transaction history
+ * Features filtering, pagination, sorting, and export functionality
  */
 const RecentTransactions: React.FC = () => {
   const [transactions, setTransactions] = useState<Transaction[]>([])
+  const [filteredTransactions, setFilteredTransactions] = useState<Transaction[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1)
+  const [itemsPerPage] = useState(10)
+
+  // Filter state
+  const [filters, setFilters] = useState<TransactionFilter>({
+    type: 'all',
+    status: 'all',
+    dateRange: 'all'
+  })
+  const [showFilters, setShowFilters] = useState(false)
+
+  // Sort state
+  const [sortBy, setSortBy] = useState<'timestamp' | 'type' | 'status'>('timestamp')
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
 
   /**
    * Fetch recent transactions from API
