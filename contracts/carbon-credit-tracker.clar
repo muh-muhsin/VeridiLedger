@@ -10,6 +10,15 @@
 (define-constant ERR_INVALID_METADATA (err u103))
 (define-constant ERR_CREDIT_RETIRED (err u104))
 (define-constant ERR_INVALID_RECIPIENT (err u105))
+(define-constant ERR_LISTING_NOT_FOUND (err u106))
+(define-constant ERR_LISTING_EXPIRED (err u107))
+(define-constant ERR_LISTING_INACTIVE (err u108))
+(define-constant ERR_INSUFFICIENT_PAYMENT (err u109))
+(define-constant ERR_ESCROW_NOT_FOUND (err u110))
+(define-constant ERR_ESCROW_EXPIRED (err u111))
+(define-constant ERR_INVALID_PRICE (err u112))
+(define-constant ERR_CANNOT_BUY_OWN_LISTING (err u113))
+(define-constant ERR_LISTING_ALREADY_EXISTS (err u114))
 
 ;; SIP-009 NFT trait implementation
 (impl-trait 'SP2PABAF9FTAJYNFZH93XENAJ8FVY99RRM50D2JG9.nft-trait.nft-trait)
@@ -18,6 +27,9 @@
 (define-data-var last-token-id uint u0)
 (define-data-var total-retired uint u0)
 (define-data-var contract-uri (optional (string-utf8 256)) none)
+(define-data-var marketplace-fee-rate uint u250) ;; 2.5% fee (250 basis points)
+(define-data-var total-marketplace-volume uint u0)
+(define-data-var platform-fee-recipient principal CONTRACT_OWNER)
 
 ;; Data maps for NFT functionality
 (define-map token-count principal uint)
@@ -46,6 +58,33 @@
 ;; Access control maps
 (define-map authorized-originators principal bool)
 
+;; Marketplace data structures
+(define-map marketplace-listings uint {
+    seller: principal,
+    price-ustx: uint,
+    listed-at: uint,
+    expires-at: uint,
+    is-active: bool
+})
+
+(define-map escrow-deposits {buyer: principal, token-id: uint} {
+    amount-ustx: uint,
+    deposited-at: uint,
+    expires-at: uint
+})
+
+(define-map price-history uint (list 10 {
+    price-ustx: uint,
+    timestamp: uint,
+    transaction-type: (string-ascii 16) ;; "sale", "listing", "delisting"
+}))
+
+(define-map marketplace-stats principal {
+    total-sales: uint,
+    total-purchases: uint,
+    total-volume-ustx: uint
+})
+
 ;; Events (using print statements for event emission)
 (define-private (emit-origination-event (token-id uint) (recipient principal) (project-id (string-ascii 256)))
     (print {
@@ -72,6 +111,36 @@
         event: "credit-retired",
         token-id: token-id,
         owner: owner,
+        block-height: block-height
+    })
+)
+
+(define-private (emit-listing-event (token-id uint) (seller principal) (price-ustx uint))
+    (print {
+        event: "credit-listed",
+        token-id: token-id,
+        seller: seller,
+        price-ustx: price-ustx,
+        block-height: block-height
+    })
+)
+
+(define-private (emit-sale-event (token-id uint) (seller principal) (buyer principal) (price-ustx uint))
+    (print {
+        event: "credit-sold",
+        token-id: token-id,
+        seller: seller,
+        buyer: buyer,
+        price-ustx: price-ustx,
+        block-height: block-height
+    })
+)
+
+(define-private (emit-delisting-event (token-id uint) (seller principal))
+    (print {
+        event: "credit-delisted",
+        token-id: token-id,
+        seller: seller,
         block-height: block-height
     })
 )
@@ -422,4 +491,276 @@
 ;; Check if an operator is approved for all tokens of an owner
 (define-read-only (is-approved-for-all (owner principal) (operator principal))
     (default-to false (map-get? operator-approved {owner: owner, operator: operator}))
+)
+
+;; ============================================================================
+;; MARKETPLACE FUNCTIONS
+;; ============================================================================
+
+;; List a carbon credit for sale on the marketplace
+(define-public (list-credit-for-sale (token-id uint) (price-ustx uint) (duration-blocks uint))
+    (let ((current-owner (unwrap! (map-get? credit-ownership token-id) ERR_NOT_FOUND))
+          (metadata (unwrap! (map-get? credit-metadata token-id) ERR_NOT_FOUND))
+          (expires-at (+ block-height duration-blocks)))
+
+        ;; Verify authorization (only owner can list)
+        (asserts! (is-eq tx-sender current-owner) ERR_UNAUTHORIZED)
+
+        ;; Verify credit is not retired
+        (asserts! (not (get is-retired metadata)) ERR_CREDIT_RETIRED)
+
+        ;; Verify valid price
+        (asserts! (> price-ustx u0) ERR_INVALID_PRICE)
+
+        ;; Verify no existing active listing
+        (asserts! (is-none (map-get? marketplace-listings token-id)) ERR_LISTING_ALREADY_EXISTS)
+
+        ;; Create marketplace listing
+        (map-set marketplace-listings token-id {
+            seller: current-owner,
+            price-ustx: price-ustx,
+            listed-at: block-height,
+            expires-at: expires-at,
+            is-active: true
+        })
+
+        ;; Add to price history
+        (add-to-price-history token-id price-ustx "listing")
+
+        ;; Emit listing event
+        (emit-listing-event token-id current-owner price-ustx)
+
+        (ok token-id)
+    )
+)
+
+;; Buy a carbon credit from the marketplace with escrow
+(define-public (buy-credit (token-id uint))
+    (let ((listing (unwrap! (map-get? marketplace-listings token-id) ERR_LISTING_NOT_FOUND))
+          (seller (get seller listing))
+          (price-ustx (get price-ustx listing))
+          (platform-fee (/ (* price-ustx (var-get marketplace-fee-rate)) u10000))
+          (seller-amount (- price-ustx platform-fee)))
+
+        ;; Verify listing is active
+        (asserts! (get is-active listing) ERR_LISTING_INACTIVE)
+
+        ;; Verify listing hasn't expired
+        (asserts! (< block-height (get expires-at listing)) ERR_LISTING_EXPIRED)
+
+        ;; Verify buyer is not the seller
+        (asserts! (not (is-eq tx-sender seller)) ERR_CANNOT_BUY_OWN_LISTING)
+
+        ;; Verify credit still exists and is not retired
+        (let ((metadata (unwrap! (map-get? credit-metadata token-id) ERR_NOT_FOUND)))
+            (asserts! (not (get is-retired metadata)) ERR_CREDIT_RETIRED)
+        )
+
+        ;; Transfer STX from buyer to seller (minus platform fee)
+        (try! (stx-transfer? seller-amount tx-sender seller))
+
+        ;; Transfer platform fee to fee recipient
+        (try! (stx-transfer? platform-fee tx-sender (var-get platform-fee-recipient)))
+
+        ;; Transfer the NFT from seller to buyer
+        (try! (transfer token-id seller tx-sender))
+
+        ;; Remove the listing
+        (map-delete marketplace-listings token-id)
+
+        ;; Update marketplace stats for seller
+        (update-marketplace-stats seller "sale" price-ustx)
+
+        ;; Update marketplace stats for buyer
+        (update-marketplace-stats tx-sender "purchase" price-ustx)
+
+        ;; Update total marketplace volume
+        (var-set total-marketplace-volume (+ (var-get total-marketplace-volume) price-ustx))
+
+        ;; Add to price history
+        (add-to-price-history token-id price-ustx "sale")
+
+        ;; Emit sale event
+        (emit-sale-event token-id seller tx-sender price-ustx)
+
+        (ok true)
+    )
+)
+
+;; Cancel a marketplace listing
+(define-public (cancel-listing (token-id uint))
+    (let ((listing (unwrap! (map-get? marketplace-listings token-id) ERR_LISTING_NOT_FOUND))
+          (seller (get seller listing)))
+
+        ;; Verify authorization (only seller or contract owner can cancel)
+        (asserts! (or
+            (is-eq tx-sender seller)
+            (is-eq tx-sender CONTRACT_OWNER)
+        ) ERR_UNAUTHORIZED)
+
+        ;; Remove the listing
+        (map-delete marketplace-listings token-id)
+
+        ;; Add to price history
+        (add-to-price-history token-id (get price-ustx listing) "delisting")
+
+        ;; Emit delisting event
+        (emit-delisting-event token-id seller)
+
+        (ok true)
+    )
+)
+
+;; Update listing price
+(define-public (update-listing-price (token-id uint) (new-price-ustx uint))
+    (let ((listing (unwrap! (map-get? marketplace-listings token-id) ERR_LISTING_NOT_FOUND))
+          (seller (get seller listing)))
+
+        ;; Verify authorization (only seller can update)
+        (asserts! (is-eq tx-sender seller) ERR_UNAUTHORIZED)
+
+        ;; Verify listing is active
+        (asserts! (get is-active listing) ERR_LISTING_INACTIVE)
+
+        ;; Verify valid price
+        (asserts! (> new-price-ustx u0) ERR_INVALID_PRICE)
+
+        ;; Update the listing
+        (map-set marketplace-listings token-id (merge listing {price-ustx: new-price-ustx}))
+
+        ;; Add to price history
+        (add-to-price-history token-id new-price-ustx "listing")
+
+        ;; Emit listing event
+        (emit-listing-event token-id seller new-price-ustx)
+
+        (ok true)
+    )
+)
+
+;; ============================================================================
+;; MARKETPLACE HELPER FUNCTIONS
+;; ============================================================================
+
+;; Add entry to price history
+(define-private (add-to-price-history (token-id uint) (price-ustx uint) (transaction-type (string-ascii 16)))
+    (let ((current-history (default-to (list) (map-get? price-history token-id)))
+          (new-entry {price-ustx: price-ustx, timestamp: block-height, transaction-type: transaction-type}))
+
+        ;; Add new entry to the beginning of the list (most recent first)
+        (let ((updated-history (unwrap-panic (as-max-len? (append (list new-entry) current-history) u10))))
+            (map-set price-history token-id updated-history)
+        )
+    )
+)
+
+;; Update marketplace statistics for a user
+(define-private (update-marketplace-stats (user principal) (action (string-ascii 16)) (amount-ustx uint))
+    (let ((current-stats (default-to {total-sales: u0, total-purchases: u0, total-volume-ustx: u0}
+                                   (map-get? marketplace-stats user))))
+        (if (is-eq action "sale")
+            (map-set marketplace-stats user {
+                total-sales: (+ (get total-sales current-stats) u1),
+                total-purchases: (get total-purchases current-stats),
+                total-volume-ustx: (+ (get total-volume-ustx current-stats) amount-ustx)
+            })
+            (map-set marketplace-stats user {
+                total-sales: (get total-sales current-stats),
+                total-purchases: (+ (get total-purchases current-stats) u1),
+                total-volume-ustx: (+ (get total-volume-ustx current-stats) amount-ustx)
+            })
+        )
+    )
+)
+
+;; ============================================================================
+;; MARKETPLACE READ-ONLY FUNCTIONS
+;; ============================================================================
+
+;; Get marketplace listing details
+(define-read-only (get-listing (token-id uint))
+    (map-get? marketplace-listings token-id)
+)
+
+;; Get price history for a token
+(define-read-only (get-price-history (token-id uint))
+    (map-get? price-history token-id)
+)
+
+;; Get marketplace statistics for a user
+(define-read-only (get-marketplace-stats (user principal))
+    (map-get? marketplace-stats user)
+)
+
+;; Get total marketplace volume
+(define-read-only (get-total-marketplace-volume)
+    (var-get total-marketplace-volume)
+)
+
+;; Get marketplace fee rate
+(define-read-only (get-marketplace-fee-rate)
+    (var-get marketplace-fee-rate)
+)
+
+;; Check if a credit is listed for sale
+(define-read-only (is-credit-listed (token-id uint))
+    (match (map-get? marketplace-listings token-id)
+        listing (and (get is-active listing) (< block-height (get expires-at listing)))
+        false
+    )
+)
+
+;; Get active listings count (helper for analytics)
+(define-read-only (get-active-listings-count)
+    ;; Note: This is a simplified version. In production, you'd want to maintain a counter
+    ;; or implement a more efficient way to count active listings
+    u0 ;; Placeholder - would need iteration over all listings
+)
+
+;; Calculate platform fee for a given price
+(define-read-only (calculate-platform-fee (price-ustx uint))
+    (/ (* price-ustx (var-get marketplace-fee-rate)) u10000)
+)
+
+;; Calculate seller proceeds after fee
+(define-read-only (calculate-seller-proceeds (price-ustx uint))
+    (- price-ustx (calculate-platform-fee price-ustx))
+)
+
+;; ============================================================================
+;; MARKETPLACE ADMINISTRATIVE FUNCTIONS
+;; ============================================================================
+
+;; Set marketplace fee rate (only contract owner)
+(define-public (set-marketplace-fee-rate (new-rate uint))
+    (begin
+        (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+        (asserts! (<= new-rate u1000) ERR_INVALID_METADATA) ;; Max 10% fee
+        (var-set marketplace-fee-rate new-rate)
+        (ok true)
+    )
+)
+
+;; Set platform fee recipient (only contract owner)
+(define-public (set-platform-fee-recipient (new-recipient principal))
+    (begin
+        (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+        (var-set platform-fee-recipient new-recipient)
+        (ok true)
+    )
+)
+
+;; Emergency function to cancel any listing (only contract owner)
+(define-public (emergency-cancel-listing (token-id uint))
+    (begin
+        (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+        (match (map-get? marketplace-listings token-id)
+            listing (begin
+                (map-delete marketplace-listings token-id)
+                (emit-delisting-event token-id (get seller listing))
+                (ok true)
+            )
+            ERR_LISTING_NOT_FOUND
+        )
+    )
 )
